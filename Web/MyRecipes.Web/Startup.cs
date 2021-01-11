@@ -16,6 +16,7 @@
     using MyRecipes.Data.Models;
     using MyRecipes.Data.Repositories;
     using MyRecipes.Data.Seeding;
+    using MyRecipes.Services;
     using MyRecipes.Services.Data;
     using MyRecipes.Services.Mapping;
     using MyRecipes.Services.Messaging;
@@ -67,6 +68,7 @@
             services.AddTransient<IGetCountsService, GetCountsService>();
             services.AddTransient<ICategoriesService, CategoriesService>();
             services.AddTransient<IRecipeService, RecipeService>();
+            services.AddTransient<IGotvachBgScraperService, GotvachBgScraperService>();
         }
 
         // This method gets called by the runtime. Use this method to configure the HTTP request pipeline.
