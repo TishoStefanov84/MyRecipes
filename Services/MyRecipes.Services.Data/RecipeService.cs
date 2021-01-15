@@ -2,6 +2,7 @@
 {
     using System;
     using System.Collections.Generic;
+    using System.IO;
     using System.Linq;
     using System.Threading.Tasks;
 
@@ -12,18 +13,22 @@
 
     public class RecipeService : IRecipeService
     {
+        private readonly string[] allowedExtensions = new[] { "jpg", "png", "gif" };
+
         private readonly IDeletableEntityRepository<Recipe> recipesRepository;
         private readonly IDeletableEntityRepository<Ingredient> ingredientsRepository;
 
-        public RecipeService(IDeletableEntityRepository<Recipe> recipesRepository, IDeletableEntityRepository<Ingredient> ingredientsRepository)
+        public RecipeService(
+            IDeletableEntityRepository<Recipe> recipesRepository,
+            IDeletableEntityRepository<Ingredient> ingredientsRepository)
         {
             this.recipesRepository = recipesRepository;
             this.ingredientsRepository = ingredientsRepository;
         }
 
-        public async Task CreateAsync(CreateRecipeInputModel input, string userId)
+        public async Task CreateAsync(CreateRecipeInputModel input, string userId, string imagePath)
         {
-            var resipe = new Recipe
+            var recipe = new Recipe
             {
                 CategoryId = input.CategoryId,
                 CookingTime = TimeSpan.FromMinutes(input.CookingTime),
@@ -42,27 +47,50 @@
                     ingredient = new Ingredient { Name = item.IngredientName };
                 }
 
-                resipe.Ingredients.Add(new RecipeIngredient
+                recipe.Ingredients.Add(new RecipeIngredient
                 {
                     Ingredient = ingredient,
                     Quantity = item.Quantity,
                 });
             }
 
-            await this.recipesRepository.AddAsync(resipe);
+            Directory.CreateDirectory($"{imagePath}/recipes/");
+            foreach (var image in input.Images)
+            {
+                var extension = Path.GetExtension(image.FileName).TrimStart('.');
+
+                if (!this.allowedExtensions.Any(x => extension.EndsWith(x)))
+                {
+                    throw new Exception($"Invalid image extension {extension}");
+                }
+
+                var dbImage = new Image
+                {
+                    AddedByUserId = userId,
+                    Extension = extension,
+                };
+
+                recipe.Images.Add(dbImage);
+
+                var physicalPath = $"{imagePath}/recipes/{dbImage.Id}.{extension}";
+                using Stream fileStream = new FileStream(physicalPath, FileMode.Create);
+                await image.CopyToAsync(fileStream);
+            }
+
+            await this.recipesRepository.AddAsync(recipe);
             await this.recipesRepository.SaveChangesAsync();
         }
 
         public IEnumerable<T> GetAll<T>(int page, int itemsPerPage = 12)
         {
-             var recipes = this.recipesRepository.AllAsNoTracking()
-                .OrderByDescending(x => x.Id)
-                .Skip((page - 1) * itemsPerPage)
-                .Take(itemsPerPage)
-                .To<T>()
-                .ToList();
+            var recipes = this.recipesRepository.AllAsNoTracking()
+               .OrderByDescending(x => x.Id)
+               .Skip((page - 1) * itemsPerPage)
+               .Take(itemsPerPage)
+               .To<T>()
+               .ToList();
 
-             return recipes;
+            return recipes;
         }
 
         public int GetCount()

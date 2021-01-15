@@ -1,9 +1,11 @@
 ﻿namespace MyRecipes.Web.Controllers
 {
+    using System;
     using System.Security.Claims;
     using System.Threading.Tasks;
 
     using Microsoft.AspNetCore.Authorization;
+    using Microsoft.AspNetCore.Hosting;
     using Microsoft.AspNetCore.Mvc;
     using MyRecipes.Services.Data;
     using MyRecipes.Web.ViewModels.Recipes;
@@ -12,11 +14,16 @@
     {
         private readonly ICategoriesService categoriesService;
         private readonly IRecipeService recipeService;
+        private readonly IWebHostEnvironment environment;
 
-        public RecipesController(ICategoriesService categoriesService, IRecipeService recipeService)
+        public RecipesController(
+            ICategoriesService categoriesService,
+            IRecipeService recipeService,
+            IWebHostEnvironment environment)
         {
             this.categoriesService = categoriesService;
             this.recipeService = recipeService;
+            this.environment = environment;
         }
 
         [Authorize]
@@ -39,7 +46,17 @@
             }
 
             var userId = this.User.FindFirst(ClaimTypes.NameIdentifier).Value;
-            await this.recipeService.CreateAsync(input, userId);
+
+            try
+            {
+                await this.recipeService.CreateAsync(input, userId, $"{this.environment.WebRootPath}/images");
+            }
+            catch (Exception ex)
+            {
+                this.ModelState.AddModelError(string.Empty, ex.Message);
+                input.CategoriesItems = this.categoriesService.GetAllAsKeyValuePairs();
+                return this.View(input);
+            }
 
             return this.Redirect("/");
         }
