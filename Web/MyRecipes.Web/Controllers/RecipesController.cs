@@ -1,7 +1,9 @@
 ﻿namespace MyRecipes.Web.Controllers
 {
+    using System.Security.Claims;
     using System.Threading.Tasks;
 
+    using Microsoft.AspNetCore.Authorization;
     using Microsoft.AspNetCore.Mvc;
     using MyRecipes.Services.Data;
     using MyRecipes.Web.ViewModels.Recipes;
@@ -17,6 +19,7 @@
             this.recipeService = recipeService;
         }
 
+        [Authorize]
         public IActionResult Create()
         {
             var viewModel = new CreateRecipeInputModel();
@@ -26,6 +29,7 @@
         }
 
         [HttpPost]
+        [Authorize]
         public async Task<IActionResult> Create(CreateRecipeInputModel input)
         {
             if (!this.ModelState.IsValid)
@@ -34,9 +38,28 @@
                 return this.View(input);
             }
 
-            await this.recipeService.CreateAsync(input);
+            var userId = this.User.FindFirst(ClaimTypes.NameIdentifier).Value;
+            await this.recipeService.CreateAsync(input, userId);
 
             return this.Redirect("/");
+        }
+
+        public IActionResult All(int id = 1)
+        {
+            if (id <= 0)
+            {
+                return this.NotFound();
+            }
+
+            const int ItemsPerPage = 12;
+            var viewModel = new RecipesListViewModel
+            {
+                ItemsPerPage = ItemsPerPage,
+                PageNumber = id,
+                RecipesCount = this.recipeService.GetCount(),
+                Recipes = this.recipeService.GetAll<RecipeInListViewModel>(id, ItemsPerPage),
+            };
+            return this.View(viewModel);
         }
     }
 }

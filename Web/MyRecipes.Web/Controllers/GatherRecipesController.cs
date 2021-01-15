@@ -21,7 +21,7 @@
 
         public async Task<IActionResult> Add()
         {
-            await this.gotvachBgScraperService.PopulateDbWithRecipesAsync(100);
+            await this.gotvachBgScraperService.ImportRecipesAsync();
 
             return this.RedirectToAction("Index");
         }

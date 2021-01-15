@@ -15,9 +15,11 @@
 
     public class GotvachBgScraperService : IGotvachBgScraperService
     {
+        private const string BaseUrl = "https://recepti.gotvach.bg/r-{0}";
         private const string Preparation = "Приготвяне";
         private const string Cooking = "Готвене";
         private const string Minutes = " мин.";
+
         private readonly IConfiguration config;
         private readonly IBrowsingContext context;
         private readonly IDeletableEntityRepository<Category> categoriesRepository;
@@ -43,32 +45,22 @@
             this.imageRepository = imageRepository;
         }
 
-        public async Task PopulateDbWithRecipesAsync(int recipesCount)
+        public async Task ImportRecipesAsync(int fromId = 1, int toId = 1000)
         {
-            var bag = new ConcurrentBag<RecipeDto>();
-
-            Parallel.For(1, recipesCount, (i) =>
-            {
-                try
-                {
-                    var recipe = this.GetRecipeInfo(i);
-                    bag.Add(recipe);
-                }
-                catch
-                {
-                }
-            });
-
+            var bag = this.ScrapeRecipes(fromId, toId);
+            int addedCount = 0;
             foreach (var recipe in bag)
             {
                 var categoryId = await this.GetOrCreateCategoryAsync(recipe.CategoryName);
-                var recipeExists = this.recipesRepository
-                    .AllAsNoTracking()
-                    .Any(x => x.Name == recipe.RecipeName);
 
-                if (recipeExists)
+                if (recipe.CookingTime.Days >= 1)
                 {
-                    continue;
+                    recipe.CookingTime = new TimeSpan(23, 59, 59);
+                }
+
+                if (recipe.PreparationTime.Days >= 1)
+                {
+                    recipe.PreparationTime = new TimeSpan(23, 59, 59);
                 }
 
                 var newRecipe = new Recipe
@@ -83,7 +75,6 @@
                 };
 
                 await this.recipesRepository.AddAsync(newRecipe);
-                await this.recipesRepository.SaveChangesAsync();
 
                 foreach (var ingr in recipe.Ingridients)
                 {
@@ -92,24 +83,47 @@
 
                     var recipeIngredient = new RecipeIngredient
                     {
-                        RecipeId = newRecipe.Id,
+                        Recipe = newRecipe,
                         IngredientId = ingredientId,
                         Quantity = quantity,
                     };
 
                     await this.recipeIngredientsRepository.AddAsync(recipeIngredient);
-                    await this.recipeIngredientsRepository.SaveChangesAsync();
                 }
 
                 var image = new Image
                 {
-                    Extension = recipe.OriginalUrl,
-                    RecipeId = newRecipe.Id,
+                    RemoteImageUrl = recipe.ImageUrl,
+                    Recipe = newRecipe,
                 };
 
                 await this.imageRepository.AddAsync(image);
-                await this.imageRepository.SaveChangesAsync();
+
+                if (++addedCount % 1000 == 0)
+                {
+                    await this.recipesRepository.SaveChangesAsync();
+                }
             }
+
+            await this.recipesRepository.SaveChangesAsync();
+        }
+
+        private ConcurrentBag<RecipeDto> ScrapeRecipes(int fromId, int toId)
+        {
+            var bag = new ConcurrentBag<RecipeDto>();
+            Parallel.For(fromId, toId + 1, i =>
+            {
+                try
+                {
+                    var recipe = this.GetRecipeInfo(i);
+                    bag.Add(recipe);
+                }
+                catch
+                {
+                }
+            });
+
+            return bag;
         }
 
         private async Task<int> GetOrCreateIngredientAsync(string ingrName)
@@ -154,8 +168,10 @@
 
         private RecipeDto GetRecipeInfo(int id)
         {
+            var url = string.Format(BaseUrl, id);
+
             var document = this.context
-                .OpenAsync($"https://recepti.gotvach.bg/r-{id}")
+                .OpenAsync(url)
                 .GetAwaiter()
                 .GetResult();
 
@@ -165,34 +181,29 @@
             }
 
             var recipe = new RecipeDto();
-            var recipeNameAndCategory = document
+
+            var recipeNameCategory = document
                 .QuerySelectorAll("#recEntity > div.breadcrumb")
                 .Select(x => x.TextContent)
                 .FirstOrDefault()
-                .Split(" »")
+                .Split(" »", StringSplitOptions.RemoveEmptyEntries)
                 .Reverse()
                 .ToArray();
 
-            recipe.CategoryName = recipeNameAndCategory[1];
+            recipe.CategoryName = recipeNameCategory[1].Trim();
 
-            recipe.RecipeName = recipeNameAndCategory[0].TrimStart();
+            recipe.RecipeName = recipeNameCategory[0].Trim();
 
             var instructions = document
                 .QuerySelectorAll(".text > p")
                 .Select(x => x.TextContent)
                 .ToList();
-            var sb = new StringBuilder();
 
-            foreach (var item in instructions)
-            {
-                sb.AppendLine(item);
-            }
-
-            recipe.Instructions = sb.ToString().TrimEnd();
+            recipe.Instructions = string.Join(Environment.NewLine, instructions);
 
             var timing = document.QuerySelectorAll(".mbox > .feat.small");
 
-            if (timing.Length > 1)
+            if (timing.Length > 0)
             {
                 var prepTime = timing[0]
                     .TextContent
@@ -200,6 +211,7 @@
                     .Replace(Minutes, string.Empty);
 
                 var totalMinutes = int.Parse(prepTime);
+
                 recipe.PreparationTime = TimeSpan.FromMinutes(totalMinutes);
             }
 
@@ -211,16 +223,23 @@
                     .Replace(Minutes, string.Empty);
 
                 var totalMinutes = int.Parse(cookTime);
+
                 recipe.CookingTime = TimeSpan.FromMinutes(totalMinutes);
             }
 
-            var portionsCount = document.QuerySelectorAll(".mbox > .feat > span").LastOrDefault().TextContent;
+            var portionsCount = document
+                .QuerySelectorAll(".mbox > .feat > span")
+                .LastOrDefault()
+                ?.TextContent;
+
             recipe.PortionsCount = int.Parse(portionsCount);
 
-            var imageUrl = document.QuerySelector("#newsGal > div.image > img").GetAttribute("src");
-            recipe.OriginalUrl = imageUrl;
+            recipe.ImageUrl = document
+                .QuerySelector("#newsGal > div.image > img")
+                .GetAttribute("src");
 
             var elements = document.QuerySelectorAll(".products > ul > li");
+
             foreach (var element in elements)
             {
                 var ingridientInfo = element.TextContent.Split(" -  ", 2);
@@ -234,6 +253,8 @@
 
                 recipe.Ingridients[ingridientName] = ingridientQuantity;
             }
+
+            recipe.OriginalUrl = url;
 
             return recipe;
         }
